@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "areaevents",
+  "compatibility_date": "2025-09-27",
+  "observability": {
+    "enabled": true
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+  // After first successful deploy, add this for ISR support:
+  // "services": [
+  //   {
+  //     "binding": "WORKER_SELF_REFERENCE",
+  //     "service": "areaevents"
+  //   }
+  // ]
+}
