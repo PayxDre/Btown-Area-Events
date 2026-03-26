@@ -1,15 +1,44 @@
-import type { Scraper, ScrapeResult } from "./types";
+import type { ScrapeResult } from "./types";
 import { normalizeAndUpsert } from "./normalize";
 import { IUEventsScraper } from "./iu-events";
 import { VisitBloomingtonScraper } from "./visitbloomington";
+import { TicketmasterScraper } from "./ticketmaster";
 
-const scrapers: Scraper[] = [
-  new IUEventsScraper(),
-  new VisitBloomingtonScraper(),
-];
+export interface ScrapeOptions {
+  postalCode?: string;
+  city?: string;
+  stateCode?: string;
+}
 
-export async function runAllScrapers(): Promise<ScrapeResult[]> {
+export async function runAllScrapers(
+  options?: ScrapeOptions
+): Promise<ScrapeResult[]> {
   const results: ScrapeResult[] = [];
+
+  // Ticketmaster works for any location
+  const ticketmaster = new TicketmasterScraper(
+    options
+      ? {
+          postalCode: options.postalCode,
+          city: options.city,
+          stateCode: options.stateCode,
+        }
+      : undefined
+  );
+
+  // Location-specific scrapers for Bloomington, IN
+  const isBloomington =
+    !options ||
+    options.city?.toLowerCase().includes("bloomington") ||
+    options.postalCode?.startsWith("474");
+
+  const scrapers = [ticketmaster];
+  if (isBloomington) {
+    scrapers.push(
+      new IUEventsScraper() as typeof ticketmaster,
+      new VisitBloomingtonScraper() as typeof ticketmaster
+    );
+  }
 
   for (const scraper of scrapers) {
     try {

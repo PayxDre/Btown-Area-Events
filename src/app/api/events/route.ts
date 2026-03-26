@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPrisma } from "@/lib/db";
+import { runAllScrapers } from "@/lib/scrapers";
 import { isTimeBlocked, eventMatchesAgeGroups } from "@/lib/filters";
 import type { BlockedWindow } from "@/lib/filters";
 import type { AgeGroupKey } from "@/lib/age-groups";
@@ -75,18 +76,36 @@ export async function GET(request: NextRequest) {
     orderBy: { startDate: "asc" },
   });
 
-  // If city filter returned zero results, fall back to all events
-  // so the user at least sees something
+  // If city filter returned zero results, auto-scrape for this location
+  // then retry the query
   let fallback = false;
-  if (allEvents.length === 0 && cityFilterApplied) {
-    const fallbackWhere: Record<string, unknown> = {
-      startDate: { gte: fromDate, lte: toDate },
-    };
-    allEvents = await prisma.event.findMany({
-      where: fallbackWhere,
-      orderBy: { startDate: "asc" },
-    });
-    fallback = true;
+  if (allEvents.length === 0 && cityFilterApplied && city) {
+    const isZip = /^\d{5}$/.test(city);
+    try {
+      await runAllScrapers({
+        postalCode: isZip ? city : undefined,
+        city: isZip ? undefined : city,
+      });
+      // Re-query after scraping
+      allEvents = await prisma.event.findMany({
+        where,
+        orderBy: { startDate: "asc" },
+      });
+    } catch (err) {
+      console.error("Auto-scrape failed:", err);
+    }
+
+    // If still no results, fall back to showing all events
+    if (allEvents.length === 0) {
+      const fallbackWhere: Record<string, unknown> = {
+        startDate: { gte: fromDate, lte: toDate },
+      };
+      allEvents = await prisma.event.findMany({
+        where: fallbackWhere,
+        orderBy: { startDate: "asc" },
+      });
+      fallback = true;
+    }
   }
 
   // Apply in-memory filters
