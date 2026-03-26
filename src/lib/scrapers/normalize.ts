@@ -1,10 +1,11 @@
-import { prisma } from "@/lib/db";
+import { getPrisma } from "@/lib/db";
 import { classifyAgeGroups } from "@/lib/age-groups";
 import type { RawEvent, ScrapeResult } from "./types";
 
 export async function normalizeAndUpsert(
   events: RawEvent[]
 ): Promise<ScrapeResult> {
+  const prisma = await getPrisma();
   const source = events[0]?.source ?? "unknown";
   let eventsNew = 0;
 

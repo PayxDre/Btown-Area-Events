@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getPrisma } from "@/lib/db";
 import { isTimeBlocked, eventMatchesAgeGroups } from "@/lib/filters";
 import type { BlockedWindow } from "@/lib/filters";
 import type { AgeGroupKey } from "@/lib/age-groups";
 import { getBoundingBox, haversineDistance } from "@/lib/geo";
 
 export async function GET(request: NextRequest) {
+  const prisma = await getPrisma();
   const params = request.nextUrl.searchParams;
 
   const city = params.get("city") || undefined;
