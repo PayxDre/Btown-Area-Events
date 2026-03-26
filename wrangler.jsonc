@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "areaevents-db",
-      "database_id": "YOUR_D1_DATABASE_ID"
+      "database_id": "d89e3e99-8130-4920-8a12-3d8234d68e71"
     }
   ]
   // After first successful deploy, add this for ISR support:
