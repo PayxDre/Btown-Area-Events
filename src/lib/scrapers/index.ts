@@ -1,8 +1,9 @@
-import type { ScrapeResult } from "./types";
+import type { Scraper, ScrapeResult } from "./types";
 import { normalizeAndUpsert } from "./normalize";
 import { IUEventsScraper } from "./iu-events";
 import { VisitBloomingtonScraper } from "./visitbloomington";
 import { TicketmasterScraper } from "./ticketmaster";
+import { JeffKnowsBoyrertownScraper } from "./jeff-knows-boyertown";
 
 export interface ScrapeOptions {
   postalCode?: string;
@@ -26,18 +27,25 @@ export async function runAllScrapers(
       : undefined
   );
 
+  // Boyertown area scraper (19525, 19512, etc.)
+  const isBoyertownArea =
+    !options ||
+    options.city?.toLowerCase().includes("boyertown") ||
+    options.city?.toLowerCase().includes("gilbertsville") ||
+    options.postalCode?.startsWith("195");
+
   // Location-specific scrapers for Bloomington, IN
   const isBloomington =
     !options ||
     options.city?.toLowerCase().includes("bloomington") ||
     options.postalCode?.startsWith("474");
 
-  const scrapers = [ticketmaster];
+  const scrapers: Scraper[] = [ticketmaster];
+  if (isBoyertownArea) {
+    scrapers.push(new JeffKnowsBoyrertownScraper());
+  }
   if (isBloomington) {
-    scrapers.push(
-      new IUEventsScraper() as typeof ticketmaster,
-      new VisitBloomingtonScraper() as typeof ticketmaster
-    );
+    scrapers.push(new IUEventsScraper(), new VisitBloomingtonScraper());
   }
 
   for (const scraper of scrapers) {
