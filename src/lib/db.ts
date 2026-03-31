@@ -7,15 +7,20 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 export async function getPrisma(): Promise<PrismaClient> {
-  // In production on Cloudflare, use D1 adapter
-  if (process.env.NODE_ENV === "production") {
+  // Try Cloudflare D1 first (works in production on Workers)
+  try {
     const { getCloudflareContext } = await import("@opennextjs/cloudflare");
     const { env } = await getCloudflareContext({ async: true });
-    const adapter = new PrismaD1((env as { DB: D1Database }).DB);
-    return new PrismaClient({ adapter });
+    const db = (env as { DB?: D1Database }).DB;
+    if (db) {
+      const adapter = new PrismaD1(db);
+      return new PrismaClient({ adapter });
+    }
+  } catch {
+    // Not running on Cloudflare — fall through to SQLite
   }
 
-  // In development, use regular SQLite file
+  // Local development: use regular SQLite file
   if (!globalForPrisma.prisma) {
     globalForPrisma.prisma = new PrismaClient();
   }
