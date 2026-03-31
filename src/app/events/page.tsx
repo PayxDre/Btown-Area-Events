@@ -24,8 +24,8 @@ function EventsContent() {
   const searchParams = useSearchParams();
   const city = searchParams.get("city") || "";
 
-  const today = format(addDays(new Date(), -7), "yyyy-MM-dd");
-  const twoWeeks = format(addDays(new Date(), 14), "yyyy-MM-dd");
+  const today = format(addDays(new Date(), -30), "yyyy-MM-dd");
+  const twoWeeks = format(addDays(new Date(), 30), "yyyy-MM-dd");
 
   const [events, setEvents] = useState<EventData[]>([]);
   const [loading, setLoading] = useState(true);
