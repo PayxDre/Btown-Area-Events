@@ -24,7 +24,7 @@ function EventsContent() {
   const searchParams = useSearchParams();
   const city = searchParams.get("city") || "";
 
-  const today = format(new Date(), "yyyy-MM-dd");
+  const today = format(addDays(new Date(), -7), "yyyy-MM-dd");
   const twoWeeks = format(addDays(new Date(), 14), "yyyy-MM-dd");
 
   const [events, setEvents] = useState<EventData[]>([]);
@@ -101,7 +101,7 @@ function EventsContent() {
               No events found for &ldquo;{city}&rdquo;
             </p>
             <p className="text-xs text-amber-600 mt-0.5">
-              Showing all available events instead. Events are currently sourced from the Bloomington, IN area. More locations coming soon!
+              Showing all available events instead. Try searching by city name (e.g. &ldquo;Boyertown&rdquo;) for better results.
             </p>
           </div>
         </div>
