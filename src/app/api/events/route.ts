@@ -25,8 +25,8 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(params.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(params.get("limit") || "20")));
 
-  // Date range
-  const fromDate = from ? new Date(from) : new Date();
+  // Date range — include past 7 days by default so recent events show up
+  const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const toDate = to
     ? new Date(to)
     : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
@@ -58,17 +58,25 @@ export async function GET(request: NextRequest) {
         city: isZip ? undefined : city,
       });
       scrapeDebug = scrapeResults;
-      // Re-query after scraping
+      // Re-query after scraping — first try with city filter
       allEvents = await db.findEvents({
         startDate: { gte: fromDate, lte: toDate },
         city,
         search,
       });
+      // If zip code didn't match, try without city filter
+      // (scraped events have city names like "Boyertown" not zip codes)
+      if (allEvents.length === 0) {
+        allEvents = await db.findEvents({
+          startDate: { gte: fromDate, lte: toDate },
+          search,
+        });
+      }
     } catch (err) {
       scrapeDebug = { error: err instanceof Error ? err.message : String(err) };
     }
 
-    // If still no results, fall back to showing all events
+    // If still no results after scraping, show all events as fallback
     if (allEvents.length === 0) {
       allEvents = await db.findEvents({
         startDate: { gte: fromDate, lte: toDate },
