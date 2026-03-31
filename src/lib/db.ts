@@ -25,13 +25,6 @@ export interface EventRow {
   updatedAt: string;
 }
 
-function getD1(): D1Database | null {
-  const ctx = (globalThis as Record<symbol, { env?: { DB?: D1Database } } | undefined>)[
-    Symbol.for("__cloudflare-context__")
-  ];
-  return ctx?.env?.DB ?? null;
-}
-
 export interface DB {
   findEvents(where: EventQuery): Promise<EventRow[]>;
   upsertEvent(event: UpsertEvent): Promise<{ isNew: boolean }>;
@@ -65,7 +58,28 @@ export interface UpsertEvent {
   isFree?: boolean | null;
 }
 
-// D1 implementation — runs on Cloudflare Workers
+function getD1(): D1Database {
+  // Try the OpenNext cloudflare context symbol
+  const ctx = (globalThis as Record<symbol, { env?: { DB?: D1Database } } | undefined>)[
+    Symbol.for("__cloudflare-context__")
+  ];
+  if (ctx?.env?.DB) return ctx.env.DB;
+
+  // Try process.env style (some Cloudflare setups)
+  const globalAny = globalThis as Record<string, unknown>;
+  if (globalAny.DB) return globalAny.DB as D1Database;
+
+  throw new Error(
+    "D1 database not found. " +
+    "Cloudflare context keys: " + JSON.stringify(
+      Object.getOwnPropertyNames(globalThis).filter(k => k.includes("cloud") || k.includes("__"))
+    ) +
+    " | Symbol keys: " + JSON.stringify(
+      Object.getOwnPropertySymbols(globalThis).map(s => s.toString())
+    )
+  );
+}
+
 class D1DB implements DB {
   constructor(private d1: D1Database) {}
 
@@ -107,7 +121,6 @@ class D1DB implements DB {
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
 
-    // Try insert first, update on conflict
     const sql = `
       INSERT INTO Event (id, sourceId, source, title, description, startDate, endDate, allDay, venueName, address, city, state, zipCode, latitude, longitude, ageGroups, sourceUrl, imageUrl, isFree, createdAt, updatedAt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -157,115 +170,8 @@ class D1DB implements DB {
   }
 }
 
-// Prisma/SQLite implementation — runs in local development
-class PrismaDB implements DB {
-  private prismaPromise: Promise<unknown> | null = null;
-
-  private async getPrisma() {
-    if (!this.prismaPromise) {
-      this.prismaPromise = import("@prisma/client").then(
-        ({ PrismaClient }) => new PrismaClient()
-      );
-    }
-    return this.prismaPromise as Promise<import("@prisma/client").PrismaClient>;
-  }
-
-  async findEvents(q: EventQuery): Promise<EventRow[]> {
-    const prisma = await this.getPrisma();
-    const where: Record<string, unknown> = {};
-
-    if (q.startDate) {
-      where.startDate = {};
-      if (q.startDate.gte) (where.startDate as Record<string, unknown>).gte = q.startDate.gte;
-      if (q.startDate.lte) (where.startDate as Record<string, unknown>).lte = q.startDate.lte;
-    }
-    if (q.city) {
-      where.OR = [
-        { city: { contains: q.city } },
-        { zipCode: { contains: q.city } },
-        { address: { contains: q.city } },
-        { state: { contains: q.city } },
-      ];
-    }
-    if (q.search) {
-      const searchOr = [
-        { title: { contains: q.search } },
-        { description: { contains: q.search } },
-        { venueName: { contains: q.search } },
-      ];
-      if (where.OR) {
-        where.AND = [{ OR: where.OR }, { OR: searchOr }];
-        delete where.OR;
-      } else {
-        where.OR = searchOr;
-      }
-    }
-
-    const events = await prisma.event.findMany({ where, orderBy: { startDate: "asc" } });
-    return events.map((e) => ({
-      ...e,
-      startDate: e.startDate.toISOString(),
-      endDate: e.endDate?.toISOString() ?? null,
-      allDay: e.allDay ? 1 : 0,
-      isFree: e.isFree != null ? (e.isFree ? 1 : 0) : null,
-      createdAt: e.createdAt.toISOString(),
-      updatedAt: e.updatedAt.toISOString(),
-    }));
-  }
-
-  async upsertEvent(e: UpsertEvent): Promise<{ isNew: boolean }> {
-    const prisma = await this.getPrisma();
-    const result = await prisma.event.upsert({
-      where: { source_sourceId: { source: e.source, sourceId: e.sourceId } },
-      update: {
-        title: e.title,
-        description: e.description ?? null,
-        startDate: e.startDate,
-        endDate: e.endDate ?? null,
-        allDay: e.allDay ?? false,
-        venueName: e.venueName ?? null,
-        address: e.address ?? null,
-        city: e.city,
-        state: e.state ?? null,
-        latitude: e.latitude ?? null,
-        longitude: e.longitude ?? null,
-        ageGroups: e.ageGroups,
-        sourceUrl: e.sourceUrl ?? null,
-        imageUrl: e.imageUrl ?? null,
-      },
-      create: {
-        sourceId: e.sourceId,
-        source: e.source,
-        title: e.title,
-        description: e.description ?? null,
-        startDate: e.startDate,
-        endDate: e.endDate ?? null,
-        allDay: e.allDay ?? false,
-        venueName: e.venueName ?? null,
-        address: e.address ?? null,
-        city: e.city,
-        state: e.state ?? null,
-        latitude: e.latitude ?? null,
-        longitude: e.longitude ?? null,
-        ageGroups: e.ageGroups,
-        sourceUrl: e.sourceUrl ?? null,
-        imageUrl: e.imageUrl ?? null,
-      },
-    });
-    return { isNew: result.createdAt.getTime() === result.updatedAt.getTime() };
-  }
-}
-
-let db: DB | null = null;
-
+// Always use D1 — no Prisma in the bundle at all
 export function getDB(): DB {
-  if (db) return db;
-
   const d1 = getD1();
-  if (d1) {
-    db = new D1DB(d1);
-  } else {
-    db = new PrismaDB();
-  }
-  return db;
+  return new D1DB(d1);
 }
