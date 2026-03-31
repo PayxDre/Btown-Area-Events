@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPrisma } from "@/lib/db";
+import { getDB, type EventRow } from "@/lib/db";
 import { runAllScrapers } from "@/lib/scrapers";
 import { isTimeBlocked, eventMatchesAgeGroups } from "@/lib/filters";
 import type { BlockedWindow } from "@/lib/filters";
@@ -8,7 +8,7 @@ import { getBoundingBox, haversineDistance } from "@/lib/geo";
 
 export async function GET(request: NextRequest) {
   try {
-  const prisma = await getPrisma();
+  const db = getDB();
   const params = request.nextUrl.searchParams;
 
   const city = params.get("city") || undefined;
@@ -25,63 +25,32 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(params.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(params.get("limit") || "20")));
 
-  // Build base Prisma query
-  const where: Record<string, unknown> = {};
-
-  // Date range filter
+  // Date range
   const fromDate = from ? new Date(from) : new Date();
   const toDate = to
     ? new Date(to)
     : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-  where.startDate = { gte: fromDate, lte: toDate };
 
-  // City filter — try to match city name, zip code, or address
-  // If nothing matches, fall back to showing all events
-  let cityFilterApplied = false;
-  if (city) {
-    where.OR = [
-      { city: { contains: city } },
-      { zipCode: { contains: city } },
-      { address: { contains: city } },
-      { state: { contains: city } },
-    ];
-    cityFilterApplied = true;
-  }
-
-  // Search filter (combined with city OR if both present)
-  if (search) {
-    const searchConditions = [
-      { title: { contains: search } },
-      { description: { contains: search } },
-      { venueName: { contains: search } },
-    ];
-    if (cityFilterApplied) {
-      // Both city and search: events must match city AND search
-      where.AND = [{ OR: where.OR }, { OR: searchConditions }];
-      delete where.OR;
-    } else {
-      where.OR = searchConditions;
-    }
-  }
-
-  // Location bounding box pre-filter
-  if (lat !== undefined && lng !== undefined) {
-    const box = getBoundingBox(lat, lng, radius);
-    where.latitude = { gte: box.minLat, lte: box.maxLat };
-    where.longitude = { gte: box.minLng, lte: box.maxLng };
-  }
+  // Location bounding box
+  const latRange = (lat !== undefined && lng !== undefined)
+    ? getBoundingBox(lat, lng, radius)
+    : undefined;
 
   // Fetch events from DB
-  let allEvents = await prisma.event.findMany({
-    where,
-    orderBy: { startDate: "asc" },
+  let allEvents = await db.findEvents({
+    startDate: { gte: fromDate, lte: toDate },
+    city,
+    search,
+    latRange: latRange ? {
+      minLat: latRange.minLat, maxLat: latRange.maxLat,
+      minLng: latRange.minLng, maxLng: latRange.maxLng,
+    } : undefined,
   });
 
   // If city filter returned zero results, auto-scrape for this location
-  // then retry the query
   let fallback = false;
   let scrapeDebug: unknown = null;
-  if (allEvents.length === 0 && cityFilterApplied && city) {
+  if (allEvents.length === 0 && city) {
     const isZip = /^\d{5}$/.test(city);
     try {
       const scrapeResults = await runAllScrapers({
@@ -90,9 +59,10 @@ export async function GET(request: NextRequest) {
       });
       scrapeDebug = scrapeResults;
       // Re-query after scraping
-      allEvents = await prisma.event.findMany({
-        where,
-        orderBy: { startDate: "asc" },
+      allEvents = await db.findEvents({
+        startDate: { gte: fromDate, lte: toDate },
+        city,
+        search,
       });
     } catch (err) {
       scrapeDebug = { error: err instanceof Error ? err.message : String(err) };
@@ -100,12 +70,8 @@ export async function GET(request: NextRequest) {
 
     // If still no results, fall back to showing all events
     if (allEvents.length === 0) {
-      const fallbackWhere: Record<string, unknown> = {
+      allEvents = await db.findEvents({
         startDate: { gte: fromDate, lte: toDate },
-      };
-      allEvents = await prisma.event.findMany({
-        where: fallbackWhere,
-        orderBy: { startDate: "asc" },
       });
       fallback = true;
     }
@@ -135,7 +101,7 @@ export async function GET(request: NextRequest) {
   }
   if (blockedWindows.length > 0) {
     filtered = filtered.filter(
-      (e) => !isTimeBlocked(e.startDate, blockedWindows)
+      (e) => !isTimeBlocked(new Date(e.startDate), blockedWindows)
     );
   }
 
@@ -154,15 +120,15 @@ export async function GET(request: NextRequest) {
   const paged = filtered.slice(offset, offset + limit);
 
   // Transform for response
-  const events = paged.map((e) => ({
+  const events = paged.map((e: EventRow) => ({
     id: e.id,
     sourceId: e.sourceId,
     source: e.source,
     title: e.title,
     description: e.description,
-    startDate: e.startDate.toISOString(),
-    endDate: e.endDate?.toISOString() || null,
-    allDay: e.allDay,
+    startDate: e.startDate,
+    endDate: e.endDate,
+    allDay: !!e.allDay,
     venueName: e.venueName,
     address: e.address,
     city: e.city,
@@ -173,7 +139,7 @@ export async function GET(request: NextRequest) {
     ageGroups: JSON.parse(e.ageGroups),
     sourceUrl: e.sourceUrl,
     imageUrl: e.imageUrl,
-    isFree: e.isFree,
+    isFree: e.isFree != null ? !!e.isFree : null,
   }));
 
   return NextResponse.json({ events, total, page, pages, fallback, scrapeDebug });
