@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "areaevents",
+  "name": "btown-area-events",
   "main": ".open-next/worker.js",
   "assets": {
     "directory": ".open-next/assets",
