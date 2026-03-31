@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { getDB, type EventRow } from "@/lib/db";
+import { runAllScrapers } from "@/lib/scrapers";
 import { isTimeBlocked, eventMatchesAgeGroups } from "@/lib/filters";
 import type { BlockedWindow } from "@/lib/filters";
 import type { AgeGroupKey } from "@/lib/age-groups";
 import { getBoundingBox, haversineDistance } from "@/lib/geo";
 
 export async function GET(request: NextRequest) {
+  try {
+  const db = getDB();
   const params = request.nextUrl.searchParams;
 
   const city = params.get("city") || undefined;
@@ -22,42 +25,49 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(params.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(params.get("limit") || "20")));
 
-  // Build base Prisma query
-  const where: Record<string, unknown> = {};
-
-  // Date range filter
-  const fromDate = from ? new Date(from) : new Date();
+  // Date range
+  const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const toDate = to
     ? new Date(to)
     : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-  where.startDate = { gte: fromDate, lte: toDate };
 
-  // City filter (case-insensitive)
-  if (city) {
-    where.city = { contains: city };
-  }
+  const isZip = city ? /^\d{5}$/.test(city) : false;
 
-  // Search filter
-  if (search) {
-    where.OR = [
-      { title: { contains: search } },
-      { description: { contains: search } },
-      { venueName: { contains: search } },
-    ];
-  }
+  // Location bounding box
+  const latRange = (lat !== undefined && lng !== undefined)
+    ? getBoundingBox(lat, lng, radius)
+    : undefined;
 
-  // Location bounding box pre-filter
-  if (lat !== undefined && lng !== undefined) {
-    const box = getBoundingBox(lat, lng, radius);
-    where.latitude = { gte: box.minLat, lte: box.maxLat };
-    where.longitude = { gte: box.minLng, lte: box.maxLng };
-  }
-
-  // Fetch events from DB
-  const allEvents = await prisma.event.findMany({
-    where,
-    orderBy: { startDate: "asc" },
+  // Step 1: Try to find events matching the search
+  let allEvents = await db.findEvents({
+    startDate: { gte: fromDate, lte: toDate },
+    city: isZip ? undefined : city, // Don't filter by zip — events have city names
+    search,
+    latRange: latRange ? {
+      minLat: latRange.minLat, maxLat: latRange.maxLat,
+      minLng: latRange.minLng, maxLng: latRange.maxLng,
+    } : undefined,
   });
+
+  // Step 2: If no events found and user searched something, try scraping
+  let scrapeDebug: unknown = null;
+  if (allEvents.length === 0 && city) {
+    try {
+      const scrapeResults = await runAllScrapers({
+        postalCode: isZip ? city : undefined,
+        city: isZip ? undefined : city,
+      });
+      scrapeDebug = scrapeResults;
+
+      // Re-query — don't use zip as city filter
+      allEvents = await db.findEvents({
+        startDate: { gte: fromDate, lte: toDate },
+        search,
+      });
+    } catch (err) {
+      scrapeDebug = { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
 
   // Apply in-memory filters
   let filtered = allEvents;
@@ -83,14 +93,14 @@ export async function GET(request: NextRequest) {
   }
   if (blockedWindows.length > 0) {
     filtered = filtered.filter(
-      (e) => !isTimeBlocked(e.startDate, blockedWindows)
+      (e) => !isTimeBlocked(new Date(e.startDate), blockedWindows)
     );
   }
 
   // Distance filter (Haversine refinement)
   if (lat !== undefined && lng !== undefined) {
     filtered = filtered.filter((e) => {
-      if (e.latitude == null || e.longitude == null) return true; // Include events without coordinates
+      if (e.latitude == null || e.longitude == null) return true;
       return haversineDistance(lat, lng, e.latitude, e.longitude) <= radius;
     });
   }
@@ -102,15 +112,15 @@ export async function GET(request: NextRequest) {
   const paged = filtered.slice(offset, offset + limit);
 
   // Transform for response
-  const events = paged.map((e) => ({
+  const events = paged.map((e: EventRow) => ({
     id: e.id,
     sourceId: e.sourceId,
     source: e.source,
     title: e.title,
     description: e.description,
-    startDate: e.startDate.toISOString(),
-    endDate: e.endDate?.toISOString() || null,
-    allDay: e.allDay,
+    startDate: e.startDate,
+    endDate: e.endDate,
+    allDay: !!e.allDay,
     venueName: e.venueName,
     address: e.address,
     city: e.city,
@@ -121,8 +131,14 @@ export async function GET(request: NextRequest) {
     ageGroups: JSON.parse(e.ageGroups),
     sourceUrl: e.sourceUrl,
     imageUrl: e.imageUrl,
-    isFree: e.isFree,
+    isFree: e.isFree != null ? !!e.isFree : null,
   }));
 
-  return NextResponse.json({ events, total, page, pages });
+  return NextResponse.json({ events, total, page, pages, scrapeDebug });
+  } catch (err) {
+    return NextResponse.json({
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    }, { status: 500 });
+  }
 }

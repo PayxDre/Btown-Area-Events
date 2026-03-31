@@ -11,7 +11,22 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const results = await runAllScrapers();
+    // Accept location params to scrape events for a specific area
+    let options: { postalCode?: string; city?: string; stateCode?: string } | undefined;
+    try {
+      const body = await request.json();
+      if (body.postalCode || body.city) {
+        options = {
+          postalCode: body.postalCode,
+          city: body.city,
+          stateCode: body.stateCode,
+        };
+      }
+    } catch {
+      // No body or invalid JSON — scrape with defaults
+    }
+
+    const results = await runAllScrapers(options);
     return NextResponse.json({ results });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
