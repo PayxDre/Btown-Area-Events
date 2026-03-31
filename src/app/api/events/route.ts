@@ -7,6 +7,7 @@ import type { AgeGroupKey } from "@/lib/age-groups";
 import { getBoundingBox, haversineDistance } from "@/lib/geo";
 
 export async function GET(request: NextRequest) {
+  try {
   const prisma = await getPrisma();
   const params = request.nextUrl.searchParams;
 
@@ -79,20 +80,22 @@ export async function GET(request: NextRequest) {
   // If city filter returned zero results, auto-scrape for this location
   // then retry the query
   let fallback = false;
+  let scrapeDebug: unknown = null;
   if (allEvents.length === 0 && cityFilterApplied && city) {
     const isZip = /^\d{5}$/.test(city);
     try {
-      await runAllScrapers({
+      const scrapeResults = await runAllScrapers({
         postalCode: isZip ? city : undefined,
         city: isZip ? undefined : city,
       });
+      scrapeDebug = scrapeResults;
       // Re-query after scraping
       allEvents = await prisma.event.findMany({
         where,
         orderBy: { startDate: "asc" },
       });
     } catch (err) {
-      console.error("Auto-scrape failed:", err);
+      scrapeDebug = { error: err instanceof Error ? err.message : String(err) };
     }
 
     // If still no results, fall back to showing all events
@@ -173,5 +176,11 @@ export async function GET(request: NextRequest) {
     isFree: e.isFree,
   }));
 
-  return NextResponse.json({ events, total, page, pages, fallback });
+  return NextResponse.json({ events, total, page, pages, fallback, scrapeDebug });
+  } catch (err) {
+    return NextResponse.json({
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    }, { status: 500 });
+  }
 }
