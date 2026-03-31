@@ -25,21 +25,23 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(params.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(params.get("limit") || "20")));
 
-  // Date range — include past 7 days by default so recent events show up
+  // Date range
   const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const toDate = to
     ? new Date(to)
     : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+
+  const isZip = city ? /^\d{5}$/.test(city) : false;
 
   // Location bounding box
   const latRange = (lat !== undefined && lng !== undefined)
     ? getBoundingBox(lat, lng, radius)
     : undefined;
 
-  // Fetch events from DB
+  // Step 1: Try to find events matching the search
   let allEvents = await db.findEvents({
     startDate: { gte: fromDate, lte: toDate },
-    city,
+    city: isZip ? undefined : city, // Don't filter by zip — events have city names
     search,
     latRange: latRange ? {
       minLat: latRange.minLat, maxLat: latRange.maxLat,
@@ -47,41 +49,23 @@ export async function GET(request: NextRequest) {
     } : undefined,
   });
 
-  // If city filter returned zero results, auto-scrape for this location
-  let fallback = false;
+  // Step 2: If no events found and user searched something, try scraping
   let scrapeDebug: unknown = null;
   if (allEvents.length === 0 && city) {
-    const isZip = /^\d{5}$/.test(city);
     try {
       const scrapeResults = await runAllScrapers({
         postalCode: isZip ? city : undefined,
         city: isZip ? undefined : city,
       });
       scrapeDebug = scrapeResults;
-      // Re-query after scraping — first try with city filter
+
+      // Re-query — don't use zip as city filter
       allEvents = await db.findEvents({
         startDate: { gte: fromDate, lte: toDate },
-        city,
         search,
       });
-      // If zip code didn't match, try without city filter
-      // (scraped events have city names like "Boyertown" not zip codes)
-      if (allEvents.length === 0) {
-        allEvents = await db.findEvents({
-          startDate: { gte: fromDate, lte: toDate },
-          search,
-        });
-      }
     } catch (err) {
       scrapeDebug = { error: err instanceof Error ? err.message : String(err) };
-    }
-
-    // If still no results after scraping, show all events as fallback
-    if (allEvents.length === 0) {
-      allEvents = await db.findEvents({
-        startDate: { gte: fromDate, lte: toDate },
-      });
-      fallback = true;
     }
   }
 
@@ -150,7 +134,7 @@ export async function GET(request: NextRequest) {
     isFree: e.isFree != null ? !!e.isFree : null,
   }));
 
-  return NextResponse.json({ events, total, page, pages, fallback, scrapeDebug });
+  return NextResponse.json({ events, total, page, pages, scrapeDebug });
   } catch (err) {
     return NextResponse.json({
       error: err instanceof Error ? err.message : String(err),
